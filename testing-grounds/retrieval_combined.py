@@ -99,14 +99,15 @@ dev_claims = dev_data['claim_text']
 processed_evidence = preprocess_data(evidence)
 processed_test = preprocess_data(test_claims)
 processed_dev = preprocess_data(dev_claims)
-
+print(len(processed_evidence))
 processed_train_claim = preprocess_data(train_claims)
 processed_dev_claim = preprocess_data(dev_claims)
 processed_test.head()
 
 # %%
 processed_evidence = processed_evidence[processed_evidence.str.strip().str.len() > 0]
-
+processed_evidence.head()
+len(processed_evidence)
 
 # %%
 # Try to use the model on unseen test claims:
@@ -114,6 +115,8 @@ processed_evidence = processed_evidence[processed_evidence.str.strip().str.len()
 
 # Vectorizing preprocessed text
 # TODO: replace Tfidf with contextual embedding
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.metrics.pairwise import cosine_similarity
 
 TOP_N = 20
 
@@ -172,11 +175,17 @@ def format_for_transformer(processed_evidence, similar_claim_evidence, true_clai
         false_evidence_list =  list(set(similar_evidence_list) - set(true_evidence_list))
        # print(len(false_evidence_list))
         for evidence in true_evidence_list:
+            if evidence not in processed_evidence.index:
+                print(evidence + "may be empty/ not in english, skipping..")
+                continue
             evidence_text = processed_evidence[evidence]
             text = claim_text + SPECIAL_TOKEN + evidence_text
             text_lst.append(text)
             label_lst.append('related')
         for evidence in false_evidence_list[:TOP_N-len(true_evidence_list)]:
+            if evidence not in processed_evidence.index:
+                print(evidence + "may be empty/ not in english, skipping..")
+                continue
             evidence_text = processed_evidence[evidence]
             text = claim_text + SPECIAL_TOKEN + evidence_text
             text_lst.append(text)
@@ -210,8 +219,7 @@ preparedTrain
 # (You can add as many code blocks and text blocks as you need. However, YOU SHOULD NOT MODIFY the section title)
 
 # %%
-from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.metrics.pairwise import cosine_similarity
+
 
 import torchtext
 from torchtext.data.utils import get_tokenizer
