@@ -13,6 +13,454 @@
 # (You can add as many code blocks and text blocks as you need. However, YOU SHOULD NOT MODIFY the section title)
 
 # %%
+#### word embedding pipeline
+
+from gensim.utils import deaccent
+from nltk import pos_tag
+from nltk import word_tokenize
+from nltk.tokenize import sent_tokenize
+from nltk.corpus import wordnet
+from nltk.stem.wordnet import WordNetLemmatizer
+
+import re
+import time
+
+import pandas as pd
+import json
+
+import pickle
+import nltk
+nltk.download('averaged_perceptron_tagger')
+
+#
+LOAD_FILES = True
+
+#d_evidence = pd.read_json("data/evidence.json", typ='series')
+
+lemmatizer = WordNetLemmatizer()
+
+# contraction_dict from WS7
+contraction_dict = {"ain't": "is not", "aren't": "are not","can't": "cannot", "'cause": "because", "could've": "could have",
+                    "couldn't": "could not", "didn't": "did not",  "doesn't": "does not", "don't": "do not", "hadn't": "had not",
+                    "hasn't": "has not", "haven't": "have not", "he'd": "he would","he'll": "he will", "he's": "he is", "how'd": "how did",
+                    "how'd'y": "how do you", "how'll": "how will", "how's": "how is",  "I'd": "I would", "I'd've": "I would have",
+                    "I'll": "I will", "I'll've": "I will have","I'm": "I am", "I've": "I have", "i'd": "i would", "i'd've": "i would have",
+                    "i'll": "i will",  "i'll've": "i will have","i'm": "i am", "i've": "i have", "isn't": "is not", "it'd": "it would",
+                    "it'd've": "it would have", "it'll": "it will", "it'll've": "it will have","it's": "it is", "let's": "let us",
+                    "ma'am": "madam", "mayn't": "may not", "might've": "might have","mightn't": "might not","mightn't've": "might not have",
+                    "must've": "must have", "mustn't": "must not", "mustn't've": "must not have", "needn't": "need not", "needn't've": "need not have",
+                    "o'clock": "of the clock", "oughtn't": "ought not", "oughtn't've": "ought not have", "shan't": "shall not", "sha'n't": "shall not",
+                    "shan't've": "shall not have", "she'd": "she would", "she'd've": "she would have", "she'll": "she will", "she'll've": "she will have",
+                    "she's": "she is", "should've": "should have", "shouldn't": "should not", "shouldn't've": "should not have", "so've": "so have",
+                    "so's": "so as", "this's": "this is","that'd": "that would", "that'd've": "that would have", "that's": "that is", "there'd": "there would",
+                    "there'd've": "there would have", "there's": "there is", "here's": "here is","they'd": "they would", "they'd've": "they would have",
+                    "they'll": "they will", "they'll've": "they will have", "they're": "they are", "they've": "they have", "to've": "to have", "wasn't": "was not",
+                    "we'd": "we would", "we'd've": "we would have", "we'll": "we will", "we'll've": "we will have", "we're": "we are", "we've": "we have",
+                    "weren't": "were not", "what'll": "what will", "what'll've": "what will have", "what're": "what are",  "what's": "what is", "what've": "what have",
+                    "when's": "when is", "when've": "when have", "where'd": "where did", "where's": "where is", "where've": "where have", "who'll": "who will",
+                    "who'll've": "who will have", "who's": "who is", "who've": "who have", "why's": "why is", "why've": "why have", "will've": "will have",
+                    "won't": "will not", "won't've": "will not have", "would've": "would have", "wouldn't": "would not", "wouldn't've": "would not have",
+                    "y'all": "you all", "y'all'd": "you all would","y'all'd've": "you all would have","y'all're": "you all are","y'all've": "you all have",
+                    "you'd": "you would", "you'd've": "you would have", "you'll": "you will", "you'll've": "you will have", "you're": "you are", "you've": "you have"}
+
+
+# https://stackoverflow.com/a/46231553
+def get_wordnet_pos(treebank_tag):
+
+    if treebank_tag.startswith('J'):
+        return wordnet.ADJ
+    elif treebank_tag.startswith('V'):
+        return wordnet.VERB
+    elif treebank_tag.startswith('N'):
+        return wordnet.NOUN
+    elif treebank_tag.startswith('R'):
+        return wordnet.ADV
+    else:
+        return None # for easy if-statement 
+
+
+def sentence_preprocessing(sentence):
+
+    out_list = []
+    # Use gensim deaccent to match more characters to [a-z]
+    sentence = deaccent(sentence.lower())
+
+    for old, new in contraction_dict.items():
+        sentence.replace(old, new)
+
+    tokenized = word_tokenize(sentence)
+
+    # now remove all tokens that don't contain any alphanumeric characters
+    # then strip non alphanumeric characters afterwards
+    tokenized = [re.sub(r"[^a-z0-9\s]", "", token) for token in tokenized if re.match(r"[a-z0-9\s]", token)]
+
+    # now lemmatize with pos
+    tagged = pos_tag(tokenized)
+    for token, tag in tagged:
+        wntag = get_wordnet_pos(tag)
+
+        if wntag is None: # do not supply tag in case of None
+            lemma = lemmatizer.lemmatize(token) 
+        else:
+            lemma = lemmatizer.lemmatize(token, pos=wntag) 
+
+        out_list.append(lemma)
+    
+    return out_list
+
+
+def evidence_preprocessing(evidences):
+  t = time.time()
+  processed = []
+  for index, item in enumerate(evidences.items()):
+    id, evidence = item
+
+    row = []
+    
+    row.append(id)
+    row.append(evidence)
+
+    # break the text into sentences before tokenizing by each sentence
+    processed_sentences = [sentence_preprocessing(sentence) for sentence in sent_tokenize(evidence)]
+    row.append(processed_sentences)
+
+
+    # Appending an empty list to populate with embeddings later
+    row.append([])
+
+    processed.append(row)
+
+    if (index + 1) % 50000 == 0:
+        print(f"{time.time() - t:.2f} - {index+1} rows processed")
+
+  return pd.DataFrame(processed, columns = ["id", "raw evidence", "processed evidence", "embeddings"])
+
+
+# Evidence processing
+if not LOAD_FILES:
+    evidence = evidence_preprocessing(d_evidence)
+    with open("../pipeline/evidence_preprocessed_v3.pkl", "wb") as f:
+        pickle.dump(evidence, f)
+else:
+    with open("../pipeline/evidence_preprocessed_v3.pkl", "rb") as f:
+        evidence = pickle.load(f)
+    
+    evidence.head()
+
+# %%
+from gensim.utils import deaccent
+from nltk import pos_tag
+from nltk import word_tokenize
+from nltk.tokenize import sent_tokenize
+from nltk.corpus import wordnet
+from nltk.stem.wordnet import WordNetLemmatizer
+
+import re
+import time
+
+import pandas as pd
+import json
+
+import pickle
+import nltk
+nltk.download('averaged_perceptron_tagger')
+
+#d_evidence = pd.read_json("data/evidence.json", typ='series')
+
+lemmatizer = WordNetLemmatizer()
+
+# contraction_dict from WS7
+contraction_dict = {"ain't": "is not", "aren't": "are not","can't": "cannot", "'cause": "because", "could've": "could have",
+                    "couldn't": "could not", "didn't": "did not",  "doesn't": "does not", "don't": "do not", "hadn't": "had not",
+                    "hasn't": "has not", "haven't": "have not", "he'd": "he would","he'll": "he will", "he's": "he is", "how'd": "how did",
+                    "how'd'y": "how do you", "how'll": "how will", "how's": "how is",  "I'd": "I would", "I'd've": "I would have",
+                    "I'll": "I will", "I'll've": "I will have","I'm": "I am", "I've": "I have", "i'd": "i would", "i'd've": "i would have",
+                    "i'll": "i will",  "i'll've": "i will have","i'm": "i am", "i've": "i have", "isn't": "is not", "it'd": "it would",
+                    "it'd've": "it would have", "it'll": "it will", "it'll've": "it will have","it's": "it is", "let's": "let us",
+                    "ma'am": "madam", "mayn't": "may not", "might've": "might have","mightn't": "might not","mightn't've": "might not have",
+                    "must've": "must have", "mustn't": "must not", "mustn't've": "must not have", "needn't": "need not", "needn't've": "need not have",
+                    "o'clock": "of the clock", "oughtn't": "ought not", "oughtn't've": "ought not have", "shan't": "shall not", "sha'n't": "shall not",
+                    "shan't've": "shall not have", "she'd": "she would", "she'd've": "she would have", "she'll": "she will", "she'll've": "she will have",
+                    "she's": "she is", "should've": "should have", "shouldn't": "should not", "shouldn't've": "should not have", "so've": "so have",
+                    "so's": "so as", "this's": "this is","that'd": "that would", "that'd've": "that would have", "that's": "that is", "there'd": "there would",
+                    "there'd've": "there would have", "there's": "there is", "here's": "here is","they'd": "they would", "they'd've": "they would have",
+                    "they'll": "they will", "they'll've": "they will have", "they're": "they are", "they've": "they have", "to've": "to have", "wasn't": "was not",
+                    "we'd": "we would", "we'd've": "we would have", "we'll": "we will", "we'll've": "we will have", "we're": "we are", "we've": "we have",
+                    "weren't": "were not", "what'll": "what will", "what'll've": "what will have", "what're": "what are",  "what's": "what is", "what've": "what have",
+                    "when's": "when is", "when've": "when have", "where'd": "where did", "where's": "where is", "where've": "where have", "who'll": "who will",
+                    "who'll've": "who will have", "who's": "who is", "who've": "who have", "why's": "why is", "why've": "why have", "will've": "will have",
+                    "won't": "will not", "won't've": "will not have", "would've": "would have", "wouldn't": "would not", "wouldn't've": "would not have",
+                    "y'all": "you all", "y'all'd": "you all would","y'all'd've": "you all would have","y'all're": "you all are","y'all've": "you all have",
+                    "you'd": "you would", "you'd've": "you would have", "you'll": "you will", "you'll've": "you will have", "you're": "you are", "you've": "you have"}
+
+
+
+
+# https://stackoverflow.com/a/46231553
+def get_wordnet_pos(treebank_tag):
+
+    if treebank_tag.startswith('J'):
+        return wordnet.ADJ
+    elif treebank_tag.startswith('V'):
+        return wordnet.VERB
+    elif treebank_tag.startswith('N'):
+        return wordnet.NOUN
+    elif treebank_tag.startswith('R'):
+        return wordnet.ADV
+    else:
+        return None # for easy if-statement 
+    
+def sentence_preprocessing(sentence):
+
+    out_list = []
+    # Use gensim deaccent to match more characters to [a-z]
+    sentence = deaccent(sentence.lower())
+
+    for old, new in contraction_dict.items():
+        sentence.replace(old, new)
+
+    tokenized = word_tokenize(sentence)
+
+    # now remove all tokens that don't contain any alphanumeric characters
+    # then strip non alphanumeric characters afterwards
+    tokenized = [re.sub(r"[^a-z0-9\s]", "", token) for token in tokenized if re.match(r"[a-z0-9\s]", token)]
+
+    # now lemmatize with pos
+    tagged = pos_tag(tokenized)
+    for token, tag in tagged:
+        wntag = get_wordnet_pos(tag)
+
+        if wntag is None: # do not supply tag in case of None
+            lemma = lemmatizer.lemmatize(token) 
+        else:
+            lemma = lemmatizer.lemmatize(token, pos=wntag) 
+
+        out_list.append(lemma)
+    
+    return out_list
+
+
+# https://huggingface.co/learn/nlp-course/chapter6/6
+def encode_word(word):
+    tokens = []
+    while len(word) > 0:
+        i = len(word)
+        while i > 0 and word[:i] not in vocab:
+            i -= 1
+        if i == 0:
+            return ["[UNK]"]
+        tokens.append(word[:i])
+        word = word[i:]
+        if len(word) > 0:
+            word = f"##{word}"
+    return tokens
+
+# adapted from https://huggingface.co/learn/nlp-course/chapter6/6
+def tokenize(sentence):
+
+    # janky workaround for preprocessed sentences
+    if type(sentence) is not list:
+        sentence = sentence_preprocessing(sentence)
+        
+    encoded_words = [encode_word(word) for word in sentence]
+    return sum(encoded_words, [])
+
+
+
+with open("../pipeline/BPETokenizer_merge_rules_v1.5.pkl", "rb") as f:
+    merge_rules = pickle.load(f)
+    
+
+# Reconstruct vocab from merge rules due to lack of foresight
+# This grabs all vocab of length 2 or above (if contains first letter)
+# or 4 or above (##__)
+vocab = [v for v in merge_rules.values()]
+
+# So iterate through merge rules again to find starting letters
+# and one letter suffixes
+for pair, merge in merge_rules.items():
+    if len(pair[0]) == 1 and pair[0] not in vocab:
+        vocab.append(pair[0])
+    if len(pair[1]) == 3 and pair[1] not in vocab:
+        vocab.append(pair[1])
+
+
+def processed_evidence_to_bpe(paragraph):
+    # 2d array -> paragraph
+    if type(paragraph[0]) is list:
+        return [tokenize(sentence) for sentence in paragraph]
+
+    # 1 sentence -> tokenize as is 
+    else:
+        return tokenize(paragraph)
+
+
+counter = 0
+def processed_evidence_to_bpe(paragraph):
+    global counter
+    counter += 1
+    if counter % 1000 == 0:
+        print(f"{counter} rows processed")
+    #2d array -> paragraph
+    if type(paragraph[0]) is list:
+        return [tokenize(sentence) for sentence in paragraph]
+
+    # 1 sentence -> tokenize as is 
+    else:
+        return tokenize(paragraph)
+
+
+# Save
+
+"""
+e["bpe evidence"] = e["processed evidence"].apply(processed_evidence_to_bpe)
+with open("BPETokenized_evidence_v3.pkl", "wb") as f:
+    pickle.dump(e, f)
+"""
+
+# Load
+with open("../pipeline/BPETokenized_evidence_v3.pkl", "rb") as f:
+    evidence = pickle.load(f)
+
+"""
+sentences = []
+
+for paragraph in evidence["bpe evidence"]:
+    if type(paragraph[0]) is list:
+        for sentence in paragraph:
+            sentences.append(sentence)
+    else:
+        sentences.append(paragraph)
+"""
+
+# Now do word2vec
+from gensim.models import Word2Vec
+
+
+EMBEDDING_DIM = 200
+"""
+embedding_model = Word2Vec(sentences=sentences,
+                           vector_size=EMBEDDING_DIM,
+                           window=4,
+                           min_count=3,
+                           workers=10,
+                           negative=5
+                           )
+
+version = 3
+with open(f"BPE Tokenizer to embedding/embeddings_BPE_v{version}.pkl", "wb") as f:
+    pickle.dump(embedding_model, f)
+"""
+
+# Load embedding
+with open("../pipeline/embeddings_BPE_v3.pkl", "rb") as f:
+    embedding_model = pickle.load(f)
+
+import numpy as np
+def sentence_embedding(sentence):
+
+  # Failsafe
+  if len(sentence) == 0:
+    return np.zeros(EMBEDDING_DIM)
+
+  if type(sentence[0]) is not list:
+      sentence = tokenize(sentence)
+
+
+  embedding = np.zeros(EMBEDDING_DIM)
+  for word in sentence:
+    word_embedding = np.zeros(EMBEDDING_DIM)
+
+    # get word vector for given word
+    # if not found, ignore (treat as having the zero vector)
+    try:
+      word_embedding = embedding_model.wv[str(word)]
+    except KeyError:
+      pass
+
+    embedding += word_embedding
+
+  return embedding / len(sentence)
+
+
+def paragraph_embedding(paragraph):
+    out = []
+
+    # One sentence
+    if type(paragraph[0]) is not list:
+        return [sentence_embedding(paragraph)]
+
+    else:
+        for sentence in paragraph:
+            out.append(sentence_embedding(sentence))
+    return out
+
+# %%
+# Baseline retrieval: immediately use the raw embeddings to retrieve closest sentences
+# Train a cutoff distance threshold.
+
+from scipy.spatial.distance import cosine
+
+# Similarity based on cosine similarity ([0-1], higher the more similar)
+def similarity(text, evidence_ids):
+
+    # Seems stupid and retrieving everything from w2v is probably cleaner
+    # TODO: make this better
+    evidence_embeddings = [evidence.loc[evidence['id'] == id, 'embeddings'].values[0] for id in evidence_ids]
+    key_embedding = sentence_embedding(text)
+    
+    similarities = []
+    for evidence_embedding in evidence_embeddings:
+        similarities.append(1-cosine(key_embedding, evidence_embedding))
+
+    return similarities
+
+
+# Using 1 - fscore as the loss
+def retrieval_loss(prediction, target):
+    numerator = 0
+    denominator = 0
+    
+    for p in prediction:
+        if p in target:
+            denominator += 2
+            numerator += 2
+        else:
+            denominator += 1
+    
+    for t in target:
+        if t not in prediction:
+            denominator += 1
+    
+    return 1 - numerator/denominator
+
+# %%
+def sentence_embedding(sentence):
+
+  # Failsafe
+  if len(sentence) == 0:
+    return np.zeros(EMBEDDING_DIM)
+
+  if type(sentence[0]) is not list:
+      sentence = tokenize(sentence)
+
+
+  embedding = np.zeros(EMBEDDING_DIM)
+  for word in sentence:
+    word_embedding = np.zeros(EMBEDDING_DIM)
+
+    # get word vector for given word
+    # if not found, ignore (treat as having the zero vector)
+    try:
+      word_embedding = embedding_model.wv[str(word)]
+    except KeyError:
+      pass
+
+    embedding += word_embedding
+
+  return embedding / len(sentence)
+
+# %%
 LOCAL_DEV = True # to switch between developing locally and on colab
 
 if not LOCAL_DEV:
@@ -106,8 +554,16 @@ processed_test.head()
 
 # %%
 processed_evidence = processed_evidence[processed_evidence.str.strip().str.len() > 0]
-processed_evidence.head()
+print(processed_evidence.head())
 len(processed_evidence)
+
+# %%
+# testing:
+evidence_embeddings = np.array([sentence_embedding(sentence) for sentence in processed_evidence[:10]])
+print(evidence_embeddings)
+
+
+
 
 # %%
 # Try to use the model on unseen test claims:
@@ -118,47 +574,73 @@ len(processed_evidence)
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 
-TOP_N = 20
+USE_EMBEDDING = True
+
+TOP_N_TRAIN = 10
+TOP_N_TEST = 10
 
 vectorizer = TfidfVectorizer()
 all_texts = pd.concat([processed_evidence, processed_train_claim])
 vectorizer.fit(all_texts)
 
-evidence_tfidf = vectorizer.transform(processed_evidence)
-test_tfidf = vectorizer.transform(processed_test)
-train_tfidf = vectorizer.transform(processed_train_claim)
-dev_tfidf = vectorizer.transform(processed_dev)
+if not USE_EMBEDDING:
+    evidence_tfidf = vectorizer.transform(processed_evidence)
+    test_tfidf = vectorizer.transform(processed_test)
+    train_tfidf = vectorizer.transform(processed_train_claim)
+    dev_tfidf = vectorizer.transform(processed_dev)
 
-similarity_matrix = cosine_similarity(test_tfidf, evidence_tfidf)
+    # TODO: replace with embeddings:
+    similarity_matrix = cosine_similarity(test_tfidf, evidence_tfidf)
+    dev_similarity_matrix = cosine_similarity(dev_tfidf, evidence_tfidf)
+    train_similarity_matrix = cosine_similarity(train_tfidf, evidence_tfidf)
+else:
 
-dev_similarity_matrix = cosine_similarity(dev_tfidf, evidence_tfidf)
-train_similarity_matrix = cosine_similarity(train_tfidf, evidence_tfidf)
+    evidence_embeddings = np.array([sentence_embedding(sentence) for sentence in processed_evidence])
+    test_embeddings = np.array([sentence_embedding(sentence) for sentence in processed_test])
+    train_embeddings = np.array([sentence_embedding(sentence) for sentence in processed_train_claim])
+    dev_embeddings = np.array([sentence_embedding(sentence) for sentence in processed_dev])
+
+    similarity_matrix = cosine_similarity(test_embeddings, evidence_embeddings)
+    dev_similarity_matrix = cosine_similarity(dev_embeddings, evidence_embeddings)
+    train_similarity_matrix = cosine_similarity(train_embeddings, evidence_embeddings)
+
+
 def getTopN(similarity_matrix, test, evidence, n):
-  test = test.to_frame(name='claim_text')
-  top_indices = np.argsort(-similarity_matrix, axis = 1)[:, :n]
-  top_evidence = [[str(evidence.index[i]) for i in row] for row in top_indices]
-  test['evidences'] = top_evidence
-  return test
+    test = test.to_frame(name='claim_text')
+    top_indices = np.argsort(-similarity_matrix, axis = 1)[:, :n]
+    top_evidence = [[str(evidence.index[i]) for i in row] for row in top_indices]
+    test['evidences'] = top_evidence
 
-test_with_evi = getTopN(similarity_matrix, processed_test, processed_evidence, TOP_N)
+    
+    return test
+
+test_with_evi = getTopN(similarity_matrix, processed_test, processed_evidence, TOP_N_TRAIN)
 test_with_evi.head()
 
-dev_with_evi = getTopN(dev_similarity_matrix, processed_dev, processed_evidence, TOP_N)
-train_with_evi = getTopN(train_similarity_matrix, processed_train_claim, processed_evidence, TOP_N)
+dev_with_evi = getTopN(dev_similarity_matrix, processed_dev, processed_evidence, TOP_N_TRAIN)
+train_with_evi = getTopN(train_similarity_matrix, processed_train_claim, processed_evidence, TOP_N_TRAIN)
 
 # %%
-test_with_evi.head()
+#test_with_evi.head()
 #processed_train_claim.head()
 #processed_evidence.head()
+
 
 # %%
 # format data for the transformer
 
 SPECIAL_TOKEN = ' <SPE_TOKEN> '
 
-def format_for_transformer(processed_evidence, similar_claim_evidence, true_claim_evidence):
+def format_for_transformer(processed_evidence, similar_claim_evidence, true_claim_evidence, top_n):
     text_lst = []
     label_lst = []
+
+    # for analysing:
+    true_evidence_num = 0
+    found_evidence_num = 0
+    false_evidence_num = 0
+    claims_with_all_evidence = 0
+
     for index, row in true_claim_evidence.iterrows():
         #print(index)
         if index in similar_claim_evidence.index:
@@ -169,10 +651,17 @@ def format_for_transformer(processed_evidence, similar_claim_evidence, true_clai
             print(similar_claim_evidence.index)
             continue
         claim_text = row['claim_text']
+        
         true_evidence_list = row['evidences']
         #print(len(true_evidence_list))
         similar_evidence_list = similar_claim_evidence_row['evidences']
         false_evidence_list =  list(set(similar_evidence_list) - set(true_evidence_list))
+        true_evidence_num += len(true_evidence_list)
+        found_evidence_num += len(similar_evidence_list) - len(false_evidence_list)
+        false_evidence_num += len(false_evidence_list)
+        if(len(similar_evidence_list) - len(false_evidence_list) == len(true_evidence_list)):
+            claims_with_all_evidence +=1    
+
        # print(len(false_evidence_list))
         for evidence in true_evidence_list:
             if evidence not in processed_evidence.index:
@@ -182,7 +671,7 @@ def format_for_transformer(processed_evidence, similar_claim_evidence, true_clai
             text = claim_text + SPECIAL_TOKEN + evidence_text
             text_lst.append(text)
             label_lst.append('related')
-        for evidence in false_evidence_list[:TOP_N-len(true_evidence_list)]:
+        for evidence in false_evidence_list[:top_n-len(true_evidence_list)]:
             if evidence not in processed_evidence.index:
                 print(evidence + "may be empty/ not in english, skipping..")
                 continue
@@ -193,10 +682,15 @@ def format_for_transformer(processed_evidence, similar_claim_evidence, true_clai
 
 
     claim_evi_label = {'text': text_lst, 'label': label_lst}
+
+    print(f"true evidence count {true_evidence_num}")
+    print(f"true evidence found in top {top_n}: {true_evidence_num}")
+    print(f"unrelated evidence found in top {top_n}: {false_evidence_num}")
+    print(f"# claims with all evidence in top {top_n}: {claims_with_all_evidence}")
     return pd.DataFrame(claim_evi_label)
 
-preparedTrain = format_for_transformer(processed_evidence, train_with_evi, train)
-preparedDev= format_for_transformer(processed_evidence, dev_with_evi, dev_data)
+preparedTrain = format_for_transformer(processed_evidence, train_with_evi, train, TOP_N_TRAIN)
+preparedDev= format_for_transformer(processed_evidence, dev_with_evi, dev_data, TOP_N_TEST)
 # preparedTrain = prepareTrainData(10)
 # preparedDev = prepareDevData(10)
 preparedTrain
@@ -310,7 +804,7 @@ ntokens = len(vocab) # TODO: verify correctness of this
 emsize = 200 # embedding dimension
 nhid = 200 # the dimension of the feedforward network model in nn.TransformerEncoder
 nlayers = 2 # the number of nn.TransformerEncoderLayer in nn.TransformerEncoder
-nhead = 2 # the number of heads in the multiheadattention models
+nhead = 4 # the number of heads in the multiheadattention models
 dropout = 0.2 # the dropout value
 
 model = TransformerClassificationModel(ntokens, emsize, nhead, nhid, nlayers, 2, dropout).to(device)
