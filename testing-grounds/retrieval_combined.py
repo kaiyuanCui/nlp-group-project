@@ -366,6 +366,10 @@ def sentence_embedding(sentence):
   if type(sentence[0]) is not list:
       sentence = tokenize(sentence)
 
+  # Check again here as sentence list can be empty after tokenisation (e.g. sentence = '  ')
+  if len(sentence) == 0:
+    return np.zeros(EMBEDDING_DIM)
+
 
   embedding = np.zeros(EMBEDDING_DIM)
   for word in sentence:
@@ -435,30 +439,7 @@ def retrieval_loss(prediction, target):
     return 1 - numerator/denominator
 
 # %%
-def sentence_embedding(sentence):
 
-  # Failsafe
-  if len(sentence) == 0:
-    return np.zeros(EMBEDDING_DIM)
-
-  if type(sentence[0]) is not list:
-      sentence = tokenize(sentence)
-
-
-  embedding = np.zeros(EMBEDDING_DIM)
-  for word in sentence:
-    word_embedding = np.zeros(EMBEDDING_DIM)
-
-    # get word vector for given word
-    # if not found, ignore (treat as having the zero vector)
-    try:
-      word_embedding = embedding_model.wv[str(word)]
-    except KeyError:
-      pass
-
-    embedding += word_embedding
-
-  return embedding / len(sentence)
 
 # %%
 LOCAL_DEV = True # to switch between developing locally and on colab
@@ -559,7 +540,7 @@ len(processed_evidence)
 
 # %%
 # testing:
-evidence_embeddings = np.array([sentence_embedding(sentence) for sentence in processed_evidence[:10]])
+evidence_embeddings = np.array([sentence_embedding(' ') for sentence in processed_evidence[:1000]])
 print(evidence_embeddings)
 
 
@@ -574,10 +555,7 @@ print(evidence_embeddings)
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 
-USE_EMBEDDING = True
-
-TOP_N_TRAIN = 10
-TOP_N_TEST = 10
+USE_EMBEDDING = False
 
 vectorizer = TfidfVectorizer()
 all_texts = pd.concat([processed_evidence, processed_train_claim])
@@ -605,6 +583,12 @@ else:
     train_similarity_matrix = cosine_similarity(train_embeddings, evidence_embeddings)
 
 
+
+
+# %%
+TOP_N_TRAIN = 20
+TOP_N_TEST = 20
+
 def getTopN(similarity_matrix, test, evidence, n):
     test = test.to_frame(name='claim_text')
     top_indices = np.argsort(-similarity_matrix, axis = 1)[:, :n]
@@ -620,11 +604,87 @@ test_with_evi.head()
 dev_with_evi = getTopN(dev_similarity_matrix, processed_dev, processed_evidence, TOP_N_TRAIN)
 train_with_evi = getTopN(train_similarity_matrix, processed_train_claim, processed_evidence, TOP_N_TRAIN)
 
-# %%
-#test_with_evi.head()
-#processed_train_claim.head()
-#processed_evidence.head()
 
+# %%
+# Get evidence with different values of N
+
+TOP_N_VALUES = [5, 10, 20, 50, 100, 200]  # Values of N to iterate over
+top_train_results = {n: getTopN(train_similarity_matrix, processed_train_claim, processed_evidence, n) for n in TOP_N_VALUES}
+
+# %%
+
+
+# %%
+import matplotlib.pyplot as plt
+
+# check effect of N on the list of evidence found
+
+
+def evaluate_top_n(similar_claim_evidence, true_claim_evidence, top_n):
+    # Dictionary to store analysis results
+    analysis_results = {
+        'true_evidence_count': 0,
+        'true_evidence_found': 0,
+        'unrelated_evidence_found': 0,
+        'claims_with_all_evidence': 0
+    }
+
+    for index, row in true_claim_evidence.iterrows():
+        if index in similar_claim_evidence.index:
+            similar_claim_evidence_row = similar_claim_evidence.loc[index]
+        else:
+            print(f"{index} NOT FOUND IN TOP N EVIDENCE!")
+            print(similar_claim_evidence.index)
+            continue
+        
+        true_evidence_list = row['evidences']
+        similar_evidence_list = similar_claim_evidence_row['evidences']
+        false_evidence_list = list(set(similar_evidence_list) - set(true_evidence_list))
+
+        analysis_results['true_evidence_count'] += len(true_evidence_list)
+        analysis_results['unrelated_evidence_found'] += len(false_evidence_list)
+        analysis_results['true_evidence_found'] += len(similar_evidence_list) - len(false_evidence_list)
+        
+        if len(similar_evidence_list) - len(false_evidence_list) == len(true_evidence_list):
+            analysis_results['claims_with_all_evidence'] += 1
+
+    return analysis_results
+
+
+evaluation_results = {n: evaluate_top_n(top_train_results[n], train, n) for n in TOP_N_VALUES}
+
+print(evaluation_results)
+
+evidence_found_percentage = [evaluation_results[n]['true_evidence_found'] / evaluation_results[n]['true_evidence_count'] *100 for n in TOP_N_VALUES]
+
+related_ratio = [evaluation_results[n]['true_evidence_found'] / (evaluation_results[n]['unrelated_evidence_found'] + evaluation_results[n]['true_evidence_found'] )  * 100 for n in TOP_N_VALUES]
+
+claims_with_all_evidence_percentage = [evaluation_results[n]['claims_with_all_evidence'] / len(processed_train_claim) *100 for n in TOP_N_VALUES]
+print(len(processed_train_claim))
+print(evaluation_results[20]['claims_with_all_evidence'])
+plt.figure(figsize=(14, 8))
+
+plt.subplot(3, 1, 1)
+plt.plot(TOP_N_VALUES, related_ratio, marker='o')
+plt.title('% of true evidence in Top-N')
+plt.xlabel('Top N')
+plt.ylabel('%')
+
+plt.subplot(3, 1, 2)
+plt.plot(TOP_N_VALUES, evidence_found_percentage, marker='o')
+plt.title('% of True Evidence Found in Top-N')
+plt.xlabel('Top N')
+plt.ylabel('%')
+
+plt.subplot(3, 1, 3)
+plt.plot(TOP_N_VALUES, claims_with_all_evidence_percentage, marker='o')
+plt.title('% of claims with all related evidence in Top-N')
+plt.xlabel('Top N')
+plt.ylabel('%')
+
+
+plt.tight_layout()
+plt.show()
 
 # %%
 # format data for the transformer
@@ -656,9 +716,12 @@ def format_for_transformer(processed_evidence, similar_claim_evidence, true_clai
         #print(len(true_evidence_list))
         similar_evidence_list = similar_claim_evidence_row['evidences']
         false_evidence_list =  list(set(similar_evidence_list) - set(true_evidence_list))
+
+
         true_evidence_num += len(true_evidence_list)
-        found_evidence_num += len(similar_evidence_list) - len(false_evidence_list)
         false_evidence_num += len(false_evidence_list)
+        found_evidence_num += len(similar_evidence_list) - len(false_evidence_list)
+        
         if(len(similar_evidence_list) - len(false_evidence_list) == len(true_evidence_list)):
             claims_with_all_evidence +=1    
 
@@ -684,7 +747,7 @@ def format_for_transformer(processed_evidence, similar_claim_evidence, true_clai
     claim_evi_label = {'text': text_lst, 'label': label_lst}
 
     print(f"true evidence count {true_evidence_num}")
-    print(f"true evidence found in top {top_n}: {true_evidence_num}")
+    print(f"true evidence found in top {top_n}: {found_evidence_num}")
     print(f"unrelated evidence found in top {top_n}: {false_evidence_num}")
     print(f"# claims with all evidence in top {top_n}: {claims_with_all_evidence}")
     return pd.DataFrame(claim_evi_label)
