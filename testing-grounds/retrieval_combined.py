@@ -662,23 +662,25 @@ related_ratio = [evaluation_results[n]['true_evidence_found'] / (evaluation_resu
 claims_with_all_evidence_percentage = [evaluation_results[n]['claims_with_all_evidence'] / len(processed_train_claim) *100 for n in TOP_N_VALUES]
 print(len(processed_train_claim))
 print(evaluation_results[20]['claims_with_all_evidence'])
-plt.figure(figsize=(14, 8))
 
-plt.subplot(3, 1, 1)
+
 plt.plot(TOP_N_VALUES, related_ratio, marker='o')
-plt.title('% of true evidence in Top-N')
+plt.title('% Evidence in Top-N Related to Claim')
 plt.xlabel('Top N')
 plt.ylabel('%')
+plt.tight_layout()
+plt.show()
 
-plt.subplot(3, 1, 2)
+
 plt.plot(TOP_N_VALUES, evidence_found_percentage, marker='o')
-plt.title('% of True Evidence Found in Top-N')
+plt.title('% of Related Evidence Found By Top-N')
 plt.xlabel('Top N')
 plt.ylabel('%')
+plt.tight_layout()
+plt.show()
 
-plt.subplot(3, 1, 3)
 plt.plot(TOP_N_VALUES, claims_with_all_evidence_percentage, marker='o')
-plt.title('% of claims with all related evidence in Top-N')
+plt.title('% of Claims With All Related Evidence in Top-N')
 plt.xlabel('Top N')
 plt.ylabel('%')
 
@@ -914,27 +916,31 @@ def evaluate(val_data_loader, eval_model):
 
 
 
+def train_over_epochs(epochs, train_dataloader, model):
+    best_val_loss = float("inf")
+    
+    best_model = None
+    #train(dataloader, model)
+    for epoch in range(1, epochs + 1):
+        epoch_start_time = time.time()
 
-best_val_loss = float("inf")
-epochs = 3 # The number of epochs
-best_model = None
-#train(dataloader, model)
-for epoch in range(1, epochs + 1):
-    epoch_start_time = time.time()
+        train_model(train_dataloader, model)
+        val_loss = evaluate(val_dataloader, model) 
+        print('-' * 89)
+        print('| end of epoch {:3d} | time: {:5.2f}s | valid loss {:5.2f} | '
+            'valid ppl {:8.2f}'.format(epoch, (time.time() - epoch_start_time),
+                                        val_loss, math.exp(val_loss)))
+        print('-' * 89)
 
-    train_model(train_dataloader, model)
-    val_loss = evaluate(val_dataloader, model) 
-    print('-' * 89)
-    print('| end of epoch {:3d} | time: {:5.2f}s | valid loss {:5.2f} | '
-          'valid ppl {:8.2f}'.format(epoch, (time.time() - epoch_start_time),
-                                     val_loss, math.exp(val_loss)))
-    print('-' * 89)
+        if val_loss < best_val_loss:
+            best_val_loss = val_loss
+            best_model = model
 
-    if val_loss < best_val_loss:
-        best_val_loss = val_loss
-        best_model = model
+        scheduler.step()
 
-    scheduler.step()
+    return best_model
+
+best_model = train_over_epochs(3, train_dataloader, model)
 
 
 # %%
@@ -1093,31 +1099,7 @@ filtered_claim_evidences.head()
 
 
 # %%
-# manually check some of them to ensure they are somewhat correct
 
-# need to keep at least one for this one
-print(test_claims['claim-2967'])
-print('=' * 89)
-
-print(test_claims['claim-979'])
-print(evidence['evidence-178433'])
-print(evidence['evidence-421870'])
-print('=' * 89)
-
-print(test_claims['claim-1609'])
-print(evidence['evidence-382341'])
-print(evidence['evidence-726093'])
-
-print('=' * 89)
-
-print(test_claims['claim-1020'])
-print(evidence['evidence-382341'])
-print(evidence['evidence-542625'])
-print('=' * 89)
-print(test_claims['claim-2599'])
-print(evidence['evidence-860747'])
-
-print('evidence-860747' in evidence)
 
 # %%
 # adapted from eval.py
@@ -1189,6 +1171,56 @@ def provided_eval(predictions, groundtruth):
 #print(dev_data.loc['claim-752']['claim_label'])
 provided_eval(filtered_claim_evidences, dev_data)
 
+# %%
+# experiement with different params
+EXPERIMENT = True
+if EXPERIMENT:
+    emsize = 200 # embedding dimension
+    nhid = 200 # the dimension of the feedforward network model in nn.TransformerEncoder
+    nlayers = 2 # the number of nn.TransformerEncoderLayer in nn.TransformerEncoder
+    nhead = 4 # the number of heads in the multiheadattention models
+    dropout = 0.2 # the dropout value
+
+    num_heads = [1, 2, 4, 8]
+    num_encoders = [1, 2, 4, 8]
+
+    heads_loss = []
+    encoders_loss = []
+    heads_reports = []
+    encoders_reports = []
+    for n in num_heads:
+
+        exp_model = TransformerClassificationModel(ntokens, emsize, n, nhid, nlayers, 2, dropout).to(device)
+        trained_model = train_over_epochs(3, train_dataloader, exp_model)
+        exp_model_loss = evaluate(val_dataloader, trained_model) 
+        heads_loss.append(exp_model_loss)
+        exp_model_report = get_classification_report(val_dataloader, trained_model)
+        exp_predictions = get_all_predictions(exp_model, val_dataloader)
+
+        filtered_claim_evidences = filter_relevant_evidences(dev_with_evi, exp_predictions)
+        provided_eval(filtered_claim_evidences, dev_data)
+        heads_reports.append(exp_model_report)
+
+    for n in num_encoders:
+
+        exp_model = TransformerClassificationModel(ntokens, emsize, nhead, nhid, n, 2, dropout).to(device)
+        trained_model = train_over_epochs(3, train_dataloader, exp_model)
+        exp_model_loss = evaluate(val_dataloader, trained_model) 
+        encoders_loss.append(exp_model_loss)
+        exp_model_report = get_classification_report(val_dataloader, trained_model)
+        exp_predictions = get_all_predictions(exp_model, val_dataloader)
+
+        filtered_claim_evidences = filter_relevant_evidences(dev_with_evi, exp_predictions)
+        provided_eval(filtered_claim_evidences, dev_data)
+        encoders_reports.append(exp_model_report)
+
+# %%
+for report in heads_reports:
+    print(report)
+print("="*100)
+for report in encoders_reports:
+    print(report)
+
 # %% [markdown]
 # ## Object Oriented Programming codes here
 # 
@@ -1235,14 +1267,8 @@ class TransformerClassificationModel(nn.Module):
         src = self.encoder(src) * math.sqrt(self.ninp)
         src = self.pos_encoder(src)
         output = self.transformer_encoder(src, self.src_mask)
-        # print("ENCODER OUTPUT")
-        # print(len(output))
-        output = output.mean(dim=1)  # aggregate across all tokens TODO: check if dim is correct
-        # print("AGGREGATE")
-        # print(len(output))
+        output = output.mean(dim=1)  
         output = self.classification_head(output) 
-        # print("FINAL")
-        # print(len(output))
         return output
 
 
