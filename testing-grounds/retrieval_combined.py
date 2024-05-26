@@ -510,7 +510,6 @@ nltk.download('wordnet')
 def preprocess_data(data: pd.Series) -> pd.Series:
   preprocessed_data = {}
   stop_words = set(stopwords.words('english'))
-  stop_words.remove('not')
   for id, text in data.items():
     text = text.lower()
     text = contractions.fix(text)
@@ -534,24 +533,23 @@ processed_dev_claim = preprocess_data(dev_claims)
 processed_test.head()
 
 # %%
+# remove empty
 processed_evidence = processed_evidence[processed_evidence.str.strip().str.len() > 0]
 print(processed_evidence.head())
 len(processed_evidence)
 
 # %%
-# testing:
-evidence_embeddings = np.array([sentence_embedding(' ') for sentence in processed_evidence[:1000]])
-print(evidence_embeddings)
+# testing embeddings:
+# evidence_embeddings = np.array([sentence_embedding(' ') for sentence in processed_evidence[:1000]])
+# print(evidence_embeddings)
 
 
 
 
 # %%
-# Try to use the model on unseen test claims:
 # Get all evidences that are likely to be relevant using a similarity score
 
 # Vectorizing preprocessed text
-# TODO: replace Tfidf with contextual embedding
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 
@@ -567,12 +565,11 @@ if not USE_EMBEDDING:
     train_tfidf = vectorizer.transform(processed_train_claim)
     dev_tfidf = vectorizer.transform(processed_dev)
 
-    # TODO: replace with embeddings:
     similarity_matrix = cosine_similarity(test_tfidf, evidence_tfidf)
     dev_similarity_matrix = cosine_similarity(dev_tfidf, evidence_tfidf)
     train_similarity_matrix = cosine_similarity(train_tfidf, evidence_tfidf)
 else:
-
+    # this takes ~ 1hr to run
     evidence_embeddings = np.array([sentence_embedding(sentence) for sentence in processed_evidence])
     test_embeddings = np.array([sentence_embedding(sentence) for sentence in processed_test])
     train_embeddings = np.array([sentence_embedding(sentence) for sentence in processed_train_claim])
@@ -586,8 +583,9 @@ else:
 
 
 # %%
-TOP_N_TRAIN = 20
-TOP_N_TEST = 20
+# find the top n most similar evidence
+TOP_N_TRAIN = 10
+TOP_N_TEST = 10
 
 def getTopN(similarity_matrix, test, evidence, n):
     test = test.to_frame(name='claim_text')
@@ -608,11 +606,11 @@ train_with_evi = getTopN(train_similarity_matrix, processed_train_claim, process
 # %%
 # Get evidence with different values of N
 
-TOP_N_VALUES = [5, 10, 20, 50, 100, 200]  # Values of N to iterate over
-top_train_results = {n: getTopN(train_similarity_matrix, processed_train_claim, processed_evidence, n) for n in TOP_N_VALUES}
+EVALUATE_TOP_N = False
 
-# %%
-
+if EVALUATE_TOP_N:
+    TOP_N_VALUES = [5, 10, 20, 50, 100, 200]  # Values of N to iterate over
+    top_train_results = {n: getTopN(train_similarity_matrix, processed_train_claim, processed_evidence, n) for n in TOP_N_VALUES}
 
 # %%
 import matplotlib.pyplot as plt
@@ -650,43 +648,44 @@ def evaluate_top_n(similar_claim_evidence, true_claim_evidence, top_n):
 
     return analysis_results
 
+if EVALUATE_TOP_N:
 
-evaluation_results = {n: evaluate_top_n(top_train_results[n], train, n) for n in TOP_N_VALUES}
+    evaluation_results = {n: evaluate_top_n(top_train_results[n], train, n) for n in TOP_N_VALUES}
 
-print(evaluation_results)
+    print(evaluation_results)
 
-evidence_found_percentage = [evaluation_results[n]['true_evidence_found'] / evaluation_results[n]['true_evidence_count'] *100 for n in TOP_N_VALUES]
+    evidence_found_percentage = [evaluation_results[n]['true_evidence_found'] / evaluation_results[n]['true_evidence_count'] *100 for n in TOP_N_VALUES]
 
-related_ratio = [evaluation_results[n]['true_evidence_found'] / (evaluation_results[n]['unrelated_evidence_found'] + evaluation_results[n]['true_evidence_found'] )  * 100 for n in TOP_N_VALUES]
+    related_ratio = [evaluation_results[n]['true_evidence_found'] / (evaluation_results[n]['unrelated_evidence_found'] + evaluation_results[n]['true_evidence_found'] )  * 100 for n in TOP_N_VALUES]
 
-claims_with_all_evidence_percentage = [evaluation_results[n]['claims_with_all_evidence'] / len(processed_train_claim) *100 for n in TOP_N_VALUES]
-print(len(processed_train_claim))
-print(evaluation_results[20]['claims_with_all_evidence'])
-
-
-plt.plot(TOP_N_VALUES, related_ratio, marker='o')
-plt.title('% Evidence in Top-N Related to Claim')
-plt.xlabel('Top N')
-plt.ylabel('%')
-plt.tight_layout()
-plt.show()
+    claims_with_all_evidence_percentage = [evaluation_results[n]['claims_with_all_evidence'] / len(processed_train_claim) *100 for n in TOP_N_VALUES]
+    print(len(processed_train_claim))
+    print(evaluation_results[20]['claims_with_all_evidence'])
 
 
-plt.plot(TOP_N_VALUES, evidence_found_percentage, marker='o')
-plt.title('% of Related Evidence Found By Top-N')
-plt.xlabel('Top N')
-plt.ylabel('%')
-plt.tight_layout()
-plt.show()
-
-plt.plot(TOP_N_VALUES, claims_with_all_evidence_percentage, marker='o')
-plt.title('% of Claims With All Related Evidence in Top-N')
-plt.xlabel('Top N')
-plt.ylabel('%')
+    plt.plot(TOP_N_VALUES, related_ratio, marker='o')
+    plt.title('% Evidence in Top-N Related to Claim')
+    plt.xlabel('Top N')
+    plt.ylabel('%')
+    plt.tight_layout()
+    plt.show()
 
 
-plt.tight_layout()
-plt.show()
+    plt.plot(TOP_N_VALUES, evidence_found_percentage, marker='o')
+    plt.title('% of Related Evidence Found By Top-N')
+    plt.xlabel('Top N')
+    plt.ylabel('%')
+    plt.tight_layout()
+    plt.show()
+
+    plt.plot(TOP_N_VALUES, claims_with_all_evidence_percentage, marker='o')
+    plt.title('% of Claims With All Related Evidence in Top-N')
+    plt.xlabel('Top N')
+    plt.ylabel('%')
+
+
+    plt.tight_layout()
+    plt.show()
 
 # %%
 # format data for the transformer
@@ -789,15 +788,6 @@ from torch.nn.utils.rnn import pad_sequence
 # No module named 'torchtext.transforms' ?
 
 # %%
-
-
-# %%
-
-
-# %%
-
-
-# %%
 # tokenize and vectorise training data for relevance classification
 
 tokenizer = get_tokenizer("basic_english")
@@ -876,28 +866,27 @@ model = TransformerClassificationModel(ntokens, emsize, nhead, nhid, nlayers, 2,
 
 # %%
 # train model
+import copy
 import math
 import torch.nn as nn
 criterion = nn.CrossEntropyLoss()
 lr = 1.0 # learning rate
 optimizer = torch.optim.SGD(model.parameters(), lr=lr)
-
-# TODO: figure out what this does and decide if it's needed in train
 scheduler = torch.optim.lr_scheduler.StepLR(optimizer, 1.0, gamma=0.95)
 
 import time
 
-def train_model(train_data_loader, model):
+def train_model(train_data_loader, curr_model):
 
-    model.train() # Turn on the train mode
+    curr_model.train() # Turn on the train mode
     for inputs, labels, offsets in train_data_loader:
         optimizer.zero_grad()
-        outputs = model(inputs)
+        outputs = curr_model(inputs)
         loss = criterion(outputs, labels)
         loss.backward()
-        clipping_value = 1 # arbitrary value of your choosing
+        clipping_value = 1 
         # training unstable? https://stackoverflow.com/questions/66625645/why-does-my-pytorch-nn-return-a-tensor-of-nan
-        torch.nn.utils.clip_grad_norm_(model.parameters(), clipping_value) # https://stackoverflow.com/questions/54716377/how-to-do-gradient-clipping-in-pytorch
+        torch.nn.utils.clip_grad_norm_(curr_model.parameters(), clipping_value) # https://stackoverflow.com/questions/54716377/how-to-do-gradient-clipping-in-pytorch
         optimizer.step()
 
 
@@ -916,7 +905,7 @@ def evaluate(val_data_loader, eval_model):
 
 
 
-def train_over_epochs(epochs, train_dataloader, model):
+def train_over_epochs(epochs, train_dataloader, val_dataloader, curr_model):
     best_val_loss = float("inf")
     
     best_model = None
@@ -924,8 +913,8 @@ def train_over_epochs(epochs, train_dataloader, model):
     for epoch in range(1, epochs + 1):
         epoch_start_time = time.time()
 
-        train_model(train_dataloader, model)
-        val_loss = evaluate(val_dataloader, model) 
+        train_model(train_dataloader, curr_model)
+        val_loss = evaluate(val_dataloader, curr_model) 
         print('-' * 89)
         print('| end of epoch {:3d} | time: {:5.2f}s | valid loss {:5.2f} | '
             'valid ppl {:8.2f}'.format(epoch, (time.time() - epoch_start_time),
@@ -934,13 +923,13 @@ def train_over_epochs(epochs, train_dataloader, model):
 
         if val_loss < best_val_loss:
             best_val_loss = val_loss
-            best_model = model
+            best_model = copy.deepcopy(curr_model)
 
         scheduler.step()
 
     return best_model
 
-best_model = train_over_epochs(3, train_dataloader, model)
+best_model = train_over_epochs(3, train_dataloader, val_dataloader, model)
 
 
 # %%
@@ -960,9 +949,6 @@ predicted_labels = torch.argmax(test_outputs, dim=1)
 print(predicted_labels)
     
 
-# %%
-
-
 # %% [markdown]
 # # 3.Testing and Evaluation
 # (You can add as many code blocks and text blocks as you need. However, YOU SHOULD NOT MODIFY the section title)
@@ -970,14 +956,14 @@ print(predicted_labels)
 # %%
 from sklearn.metrics import classification_report
 def get_classification_report(val_data_loader, eval_model):
-    model.eval()
+    eval_model.eval()
 
 
     y_true = []
     y_pred = []
 
     for inputs, labels, offsets in val_data_loader:
-        outputs = model(inputs)
+        outputs = eval_model(inputs)
         predicted_labels = torch.argmax(outputs, dim=1)
         y_true += labels
         y_pred += predicted_labels
@@ -994,9 +980,6 @@ print('| End of training | test loss {:5.2f} | test ppl {:8.2f}'.format(
 print('=' * 89)
 
 print(test_report)
-
-
-# %%
 
 
 # %%
@@ -1061,7 +1044,7 @@ print(count_labels(all_predictions))
 # %%
 # update test_with_evi with model results
 
-def filter_relevant_evidences(claim_evidences, model_classifications, default=True):
+def filter_relevant_evidences(claim_evidences, model_classifications, default=True, no_filter = False):
     claims = claim_evidences['claim_text']
     evidences = claim_evidences['evidences']
     filtered_evidences = []
@@ -1075,7 +1058,7 @@ def filter_relevant_evidences(claim_evidences, model_classifications, default=Tr
         for evidence in curr_evidences:
             # 0 => related
             
-            if classifications_index < len(model_classifications) and model_classifications[classifications_index] == 0:
+            if no_filter or (classifications_index < len(model_classifications) and model_classifications[classifications_index] == 0):
                 curr_filtered.append(evidence)
 
             classifications_index += 1
@@ -1095,11 +1078,13 @@ def filter_relevant_evidences(claim_evidences, model_classifications, default=Tr
 print(len(all_predictions))
 filtered_claim_evidences = filter_relevant_evidences(dev_with_evi, all_predictions)
 filtered_claim_evidences.head()
+# just change the format here
+top_n_predictions = filter_relevant_evidences(dev_with_evi, all_predictions, no_filter=True)
 
 
 
 # %%
-
+top_n_predictions.head()
 
 # %%
 # adapted from eval.py
@@ -1170,6 +1155,7 @@ def provided_eval(predictions, groundtruth):
 # print("claim-752" in dev_data)
 #print(dev_data.loc['claim-752']['claim_label'])
 provided_eval(filtered_claim_evidences, dev_data)
+provided_eval(top_n_predictions, dev_data)
 
 # %%
 # experiement with different params
@@ -1181,8 +1167,8 @@ if EXPERIMENT:
     nhead = 4 # the number of heads in the multiheadattention models
     dropout = 0.2 # the dropout value
 
-    num_heads = [1, 2, 4, 8]
-    num_encoders = [1, 2, 4, 8]
+    num_heads = [1, 2, 4, 8, 20]
+    num_encoders = [2, 4, 6, 8, 10]
 
     heads_loss = []
     encoders_loss = []
@@ -1191,11 +1177,12 @@ if EXPERIMENT:
     for n in num_heads:
 
         exp_model = TransformerClassificationModel(ntokens, emsize, n, nhid, nlayers, 2, dropout).to(device)
-        trained_model = train_over_epochs(3, train_dataloader, exp_model)
+        trained_model = train_over_epochs(3, train_dataloader, val_dataloader, exp_model)
         exp_model_loss = evaluate(val_dataloader, trained_model) 
         heads_loss.append(exp_model_loss)
         exp_model_report = get_classification_report(val_dataloader, trained_model)
-        exp_predictions = get_all_predictions(exp_model, val_dataloader)
+        print(exp_model_report)
+        exp_predictions = get_all_predictions(trained_model, val_dataloader)
 
         filtered_claim_evidences = filter_relevant_evidences(dev_with_evi, exp_predictions)
         provided_eval(filtered_claim_evidences, dev_data)
@@ -1204,11 +1191,12 @@ if EXPERIMENT:
     for n in num_encoders:
 
         exp_model = TransformerClassificationModel(ntokens, emsize, nhead, nhid, n, 2, dropout).to(device)
-        trained_model = train_over_epochs(3, train_dataloader, exp_model)
+        trained_model = train_over_epochs(3, train_dataloader,val_dataloader, exp_model)
         exp_model_loss = evaluate(val_dataloader, trained_model) 
         encoders_loss.append(exp_model_loss)
         exp_model_report = get_classification_report(val_dataloader, trained_model)
-        exp_predictions = get_all_predictions(exp_model, val_dataloader)
+        print(exp_model_report)
+        exp_predictions = get_all_predictions(trained_model, val_dataloader)
 
         filtered_claim_evidences = filter_relevant_evidences(dev_with_evi, exp_predictions)
         provided_eval(filtered_claim_evidences, dev_data)
@@ -1220,6 +1208,10 @@ for report in heads_reports:
 print("="*100)
 for report in encoders_reports:
     print(report)
+
+# %%
+print(heads_loss)
+print(encoders_loss)
 
 # %% [markdown]
 # ## Object Oriented Programming codes here
